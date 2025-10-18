@@ -22,25 +22,45 @@ jobs:
             target: aarch64-unknown-linux-gnu
     
     runs-on: ubuntu-latest
+    container: debian:12
     
     steps:
+    - name: Install dependencies
+      run: |
+        apt-get update
+        apt-get install -y curl build-essential gcc git pkg-config libssl-dev ca-certificates
+    
     - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+      run: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      shell: bash
+    
+    - name: Setup Rust environment
+      run: |
+        . $HOME/.cargo/env
+        rustup default stable
+      shell: bash
 
     - name: Install cargo-deb
-      run: cargo install cargo-deb
+      run: |
+        . $HOME/.cargo/env
+        cargo install cargo-deb
+      shell: bash
 
     - name: Add Rust target
-      run: rustup target add ${{ matrix.target }}
+      run: |
+        . $HOME/.cargo/env
+        rustup target add ${{ matrix.target }}
+      shell: bash
 
     - name: Install cross-compilation tools (ARM64)
       if: matrix.arch == 'arm64'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu
+        apt-get install -y gcc-aarch64-linux-gnu
 
     - name: Configure Cargo for cross-compilation (ARM64)
       if: matrix.arch == 'arm64'
@@ -52,10 +72,16 @@ jobs:
         EOF
 
     - name: Build release binary
-      run: cargo build --release --target ${{ matrix.target }}
+      run: |
+        . $HOME/.cargo/env
+        cargo build --release --target ${{ matrix.target }}
+      shell: bash
 
     - name: Build .deb package
-      run: cargo deb --target ${{ matrix.target }} --no-build
+      run: |
+        . $HOME/.cargo/env
+        cargo deb --target ${{ matrix.target }} --no-build
+      shell: bash
 
     - name: Get package info
       id: package
