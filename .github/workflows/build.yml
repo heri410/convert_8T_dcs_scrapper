@@ -2,12 +2,25 @@ name: Build and Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write 
+  
 jobs:
   build-deb:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+    
     runs-on: ubuntu-latest
     
     steps:
@@ -17,108 +30,57 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Cache cargo index
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Cache cargo build
-      uses: actions/cache@v4
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-
     - name: Install cargo-deb
       run: cargo install cargo-deb
 
+    - name: Add Rust target
+      run: rustup target add ${{ matrix.target }}
+
+    - name: Install cross-compilation tools (ARM64)
+      if: matrix.arch == 'arm64'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu
+
+    - name: Configure Cargo for cross-compilation (ARM64)
+      if: matrix.arch == 'arm64'
+      run: |
+        mkdir -p .cargo
+        cat > .cargo/config.toml << EOF
+        [target.aarch64-unknown-linux-gnu]
+        linker = "aarch64-linux-gnu-gcc"
+        EOF
+
     - name: Build release binary
-      run: cargo build --release
+      run: cargo build --release --target ${{ matrix.target }}
 
     - name: Build .deb package
-      run: cargo deb
+      run: cargo deb --target ${{ matrix.target }} --no-build
 
-    - name: Get package name
+    - name: Get package info
       id: package
       run: |
-        DEB_FILE=$(ls target/debian/*.deb | head -n 1)
+        DEB_FILE=$(ls target/${{ matrix.target }}/debian/*.deb | head -n 1)
         echo "deb_file=$DEB_FILE" >> $GITHUB_OUTPUT
         echo "deb_name=$(basename $DEB_FILE)" >> $GITHUB_OUTPUT
+        VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Architecture: ${{ matrix.arch }}"
+        echo "Version: $VERSION"
+        echo "Package: $DEB_FILE"
 
     - name: Upload .deb as artifact
       uses: actions/upload-artifact@v4
       with:
-        name: debian-package
+        name: debian-package-${{ matrix.arch }}
         path: ${{ steps.package.outputs.deb_file }}
 
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/')
+    - name: Upload .deb to Release
       uses: softprops/action-gh-release@v2
       with:
+        tag_name: v${{ steps.package.outputs.version }}
+        name: Release v${{ steps.package.outputs.version }}
         files: ${{ steps.package.outputs.deb_file }}
         generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-binaries:
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_name: convert_8T_dcs_scrapper-linux-amd64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact_name: convert_8T_dcs_scrapper-linux-arm64
-    
-    runs-on: ${{ matrix.os }}
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Set up QEMU for ARM64
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
-      uses: docker/setup-qemu-action@v3
-      with:
-        platforms: arm64
-
-    - name: Build release binary (native)
-      if: matrix.target == 'x86_64-unknown-linux-gnu'
-      run: cargo build --release --target ${{ matrix.target }}
-
-    - name: Build release binary (ARM64 via Docker)
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
-      run: |
-        docker run --rm -v $PWD:/workspace -w /workspace \
-          --platform linux/arm64 \
-          rust:latest \
-          bash -c "cargo build --release --target aarch64-unknown-linux-gnu"
-
-    - name: Rename binary
-      run: |
-        mkdir -p artifacts
-        cp target/${{ matrix.target }}/release/convert_8T_dcs_scrapper artifacts/${{ matrix.artifact_name }}
-
-    - name: Upload binary as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ matrix.artifact_name }}
-        path: artifacts/${{ matrix.artifact_name }}
-
-    - name: Upload to Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v2
-      with:
-        files: artifacts/${{ matrix.artifact_name }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        draft: true
+        prerelease: false
