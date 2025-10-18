@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+if ! getent group convert8t >/dev/null; then
+    addgroup --system convert8t
+fi
+
+if ! getent passwd convert8t >/dev/null; then
+    adduser --system --ingroup convert8t --home /nonexistent \
+        --no-create-home --disabled-password --disabled-login \
+        --gecos "Convert 8T DCS Scraper" convert8t
+fi
+
+# Config-Hinweis
+if [ ! -f /etc/convert_8T_dcs_scrapper/config.toml ]; then
+    echo "No config file found. Please edit /etc/convert_8T_dcs_scrapper/config.toml"
+fi
+
+#DEBHELPER#
+
+exit 0

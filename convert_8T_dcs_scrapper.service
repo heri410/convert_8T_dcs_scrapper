@@ -1,0 +1,26 @@
+[Unit]
+Description=Convert 8T DCS Solar Power Scraper
+Documentation=https://github.com/heri410/convert_8T_dcs_scrapper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=convert8t
+Group=convert8t
+WorkingDirectory=/etc/convert_8T_dcs_scrapper
+ExecStart=/usr/bin/convert_8T_dcs_scrapper
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment="RUST_LOG=info"
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

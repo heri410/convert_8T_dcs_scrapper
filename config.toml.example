@@ -1,0 +1,13 @@
+[pv_webserver]
+url = "http://192.168.50.23/index.fhtml"
+username = "pvserver"
+password = "pvwr"
+
+[influxdb]
+url = "http://localhost:8086"
+database = "solar"
+token = "your-influxdb-token-here"
+measurement = "solar_power"
+
+[scraper]
+interval_seconds = 60

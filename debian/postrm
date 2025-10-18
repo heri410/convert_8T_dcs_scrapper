@@ -1,0 +1,28 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|purge)
+        # Stop and disable service
+        if systemctl is-active --quiet convert_8T_dcs_scrapper; then
+            systemctl stop convert_8T_dcs_scrapper
+        fi
+        
+        if [ "$1" = "purge" ]; then
+            # Remove config on purge
+            rm -rf /etc/convert_8T_dcs_scrapper
+            
+            # Remove user and group
+            if getent passwd convert8t >/dev/null; then
+                deluser --system convert8t || true
+            fi
+            if getent group convert8t >/dev/null; then
+                delgroup --system convert8t || true
+            fi
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
