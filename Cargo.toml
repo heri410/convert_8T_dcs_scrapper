@@ -1,6 +1,6 @@
 [package]
 name = "convert_8T_dcs_scrapper"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["Henrik <henrik@mertens.digital>"]
 description = "Solar Power Scraper for convert 8T dcs inverters"
