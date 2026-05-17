@@ -1,6 +1,6 @@
 [package]
 name = "convert_8T_dcs_scrapper"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Henrik <henrik@mertens.digital>"]
 description = "Solar Power Scraper for convert 8T dcs inverters"
@@ -9,13 +9,14 @@ license-file = "LICENSE"
 [dependencies]
 env_logger = "0.11.8"
 log = "0.4.28"
-scraper = "0.24.0"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+scraper = "0.27.0"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 tokio = { version = "1", features = ["full"] }
-influxdb = { version = "0.7", default-features = false, features = ["derive", "reqwest-client-rustls"] }
+influxdb = { version = "0.8.0", default-features = false, features = ["derive", "rustls", "chrono"] }
 serde = { version = "1.0", features = ["derive"] }
-chrono = "0.4"
-toml = "0.9"
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+toml = "1.1"
 
 [package.metadata.deb]
 maintainer = "Henrik Mertens<henrik@mertens.digital>"

@@ -4,8 +4,10 @@ use log::{debug, info, error};
 use scraper::{Html, Selector};
 use influxdb::{Client, InfluxDbWriteable};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -42,7 +44,7 @@ impl Config {
     }
 }
 
-#[derive(InfluxDbWriteable)]
+#[derive(InfluxDbWriteable, Serialize, Deserialize, Debug, Clone)]
 struct SolarMetrics {
     time: DateTime<Utc>,
     #[influxdb(tag)]
@@ -130,6 +132,119 @@ fn extract_device_name(html: &Html) -> String {
     "Unknown_Device".to_string()
 }
 
+fn pending_queue_path() -> PathBuf {
+    PathBuf::from("pending_metrics.jsonl")
+}
+
+fn append_pending_metric(metrics: &SolarMetrics) -> Result<(), Box<dyn std::error::Error>> {
+    let path = pending_queue_path();
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    let mut writer = BufWriter::new(file);
+    let json = serde_json::to_string(metrics)?;
+    writer.write_all(json.as_bytes())?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn load_pending_metrics() -> Result<Vec<SolarMetrics>, Box<dyn std::error::Error>> {
+    let path = pending_queue_path();
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let file = fs::File::open(&path)?;
+    let reader = BufReader::new(file);
+    let mut metrics = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<SolarMetrics>(&line) {
+            Ok(entry) => metrics.push(entry),
+            Err(err) => {
+                error!("Skipping invalid pending metric entry: {}", err);
+            }
+        }
+    }
+
+    Ok(metrics)
+}
+
+fn write_pending_metrics(metrics: &[SolarMetrics]) -> Result<(), Box<dyn std::error::Error>> {
+    let path = pending_queue_path();
+
+    if metrics.is_empty() {
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        return Ok(());
+    }
+
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)?;
+    let mut writer = BufWriter::new(file);
+
+    for metric in metrics {
+        let json = serde_json::to_string(metric)?;
+        writer.write_all(json.as_bytes())?;
+        writer.write_all(b"\n")?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+async fn send_metric_to_influx(
+    config: &Config,
+    metrics: &SolarMetrics,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::new(&config.influxdb.url, &config.influxdb.database)
+        .with_token(&config.influxdb.token);
+
+    client
+        .query(metrics.clone().try_into_query(&config.influxdb.measurement).unwrap())
+        .await?;
+    Ok(())
+}
+
+async fn flush_pending_metrics(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    let pending = load_pending_metrics()?;
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    info!("Retrying {} pending metric(s)", pending.len());
+
+    let mut unsent = Vec::new();
+    for metric in pending {
+        match send_metric_to_influx(config, &metric).await {
+            Ok(_) => info!("Resent pending metric for {}", metric.time),
+            Err(err) => {
+                error!("Failed to resend pending metric: {}", err);
+                unsent.push(metric);
+            }
+        }
+    }
+
+    write_pending_metrics(&unsent)?;
+    if unsent.is_empty() {
+        info!("All pending metrics were successfully sent")
+    } else {
+        error!("{} pending metric(s) remain in queue", unsent.len())
+    }
+
+    Ok(())
+}
+
 async fn scrape_and_save(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let resp = reqwest::Client::new()
         .get(&config.pv_webserver.url)
@@ -179,17 +294,17 @@ async fn scrape_and_save(config: &Config) -> Result<(), Box<dyn std::error::Erro
     info!("L2: {} V / {} W", metrics.l2_voltage, metrics.l2_power);
     info!("L3: {} V / {} W", metrics.l3_voltage, metrics.l3_power);
 
-    // In InfluxDB schreiben
-    let client = Client::new(&config.influxdb.url, &config.influxdb.database)
-        .with_token(&config.influxdb.token);
-    
-    let write_result = client
-        .query(metrics.into_query(&config.influxdb.measurement))
-        .await;
-
-    match write_result {
+    // InfluxDB schreiben
+    match send_metric_to_influx(config, &metrics).await {
         Ok(_) => info!("Successfully wrote data to InfluxDB"),
-        Err(e) => error!("Failed to write to InfluxDB: {}", e),
+        Err(e) => {
+            error!("Failed to write to InfluxDB: {}", e);
+            if let Err(err) = append_pending_metric(&metrics) {
+                error!("Failed to persist pending metric: {}", err);
+            } else {
+                info!("Stored metric locally for retry when InfluxDB is reachable")
+            }
+        }
     }
 
     Ok(())
@@ -222,6 +337,10 @@ async fn main() {
         interval.tick().await;
         
         info!("--- Starting scrape cycle ---");
+        if let Err(e) = flush_pending_metrics(&config).await {
+            error!("Error while flushing pending metrics: {}", e);
+        }
+        
         match scrape_and_save(&config).await {
             Ok(_) => info!("Scrape cycle completed successfully"),
             Err(e) => error!("Error during scrape cycle: {}", e),
